@@ -33,10 +33,10 @@ class _HomeFeedPageState extends State<HomeFeedPage> {
     'Tundra': 'assets/audio/Tundra.mp3',
     'Boreal forest': 'assets/audio/Boreal.mp3',
     'Alpine': 'assets/audio/Alpine.mp3',
-    'Eastern Deciduous': 'assets/audio/Eastern.mp3',
+    'Deciduous': 'assets/audio/Eastern.mp3',
     'Grassland': 'assets/audio/Grassland.mp3',
     'Desert': 'assets/audio/Desert.mp3',
-    'Tropical Rainforest': 'assets/audio/Rainforest.mp3',
+    'Rainforest': 'assets/audio/Rainforest.mp3',
     'Habitat Hall': 'assets/audio/HabitatHall.mp3', // example; pick your file
     'Casts': 'assets/audio/Casts.mp3',
   };
@@ -294,7 +294,7 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
 
   // NEW: simple audio player UI shown below the card slider
   Widget _buildAudioPlayer() {
-    if (_nowPlayingTitle == null) return const SizedBox.shrink();
+    //if (_nowPlayingTitle == null) return const SizedBox.shrink();
 
     return Container(
       padding: const EdgeInsets.all(12),
