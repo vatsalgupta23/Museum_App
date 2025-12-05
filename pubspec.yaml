@@ -73,9 +73,16 @@ flutter:
     - assets/Rainforest_Wong.jpg
     - assets/Tundra.jpg
     - assets/audio/Alpine.mp3
+    - assets/audio/Boreal.mp3
+    - assets/audio/Desert.mp3
+    - assets/audio/Eastern.mp3
     - assets/audio/Grassland.mp3
+    - assets/audio/HabitatHall.mp3
+    - assets/audio/Skeletons2.mp3
+    - assets/audio/Skulls2.mp3
+    - assets/audio/Tundra.mp3
     - assets/audio/Rainforest.mp3
-    - assets/audio/Skeletons.mp3
+    - assets/audio/Casts.mp3
   #  - images/a_dot_burr.jpeg
   #  - images/a_dot_ham.jpeg
 

@@ -28,15 +28,17 @@ class _HomeFeedPageState extends State<HomeFeedPage> {
 
   // Map exhibit title -> audio asset (change filenames to yours)
   final Map<String, String> _audioForTitle = const {
-    'Skeletons': 'assets/audio/Skeletons.mp3',
-    'Tundra': 'assets/audio/tundra.mp3',
-    'Boreal forest': 'assets/audio/boreal_forest.mp3',
+    'Skeletons': 'assets/audio/Skeletons2.mp3',
+    'Skulls': 'assets/audio/Skulls2.mp3',
+    'Tundra': 'assets/audio/Tundra.mp3',
+    'Boreal forest': 'assets/audio/Boreal.mp3',
     'Alpine': 'assets/audio/Alpine.mp3',
-    'Eastern Deciduous': 'assets/audio/eastern_deciduous.mp3',
+    'Eastern Deciduous': 'assets/audio/Eastern.mp3',
     'Grassland': 'assets/audio/Grassland.mp3',
-    'Desert': 'assets/audio/desert.mp3',
+    'Desert': 'assets/audio/Desert.mp3',
     'Tropical Rainforest': 'assets/audio/Rainforest.mp3',
-    'Habitat Hall': 'assets/audio/tundra.mp3', // example; pick your file
+    'Habitat Hall': 'assets/audio/HabitatHall.mp3', // example; pick your file
+    'Casts': 'assets/audio/Casts.mp3',
   };
 
   // Fake data (add descriptions)
@@ -120,6 +122,15 @@ Temperatures change significantly during the four seasons. A warm growing season
           '''Truly a Jungle - The small deer finding its way through the dense vegetation is a mazama or brocket deer. In the tropics, mammals are often small, while insects and reptiles are frequently large. 
 Tropical rain forests are home to the greatest diversity of animal life on earth. The richness of this diversity can be seen in this Mexican rain forest, where you can see a spider monkey, parrot, termite nest, anteater, and many other plants and animals. ''',
     ),
+    _CardItem(
+      tag: 'Exhibit',
+      title: 'Casts',
+      imageUrl: 'assets/Dinosaurs_platform.jpg',
+      description:
+          '''Truly a Jungle - The small deer finding its way through the dense vegetation is a mazama or brocket deer. In the tropics, mammals are often small, while insects and reptiles are frequently large. 
+Tropical rain forests are home to the greatest diversity of animal life on earth. The richness of this diversity can be seen in this Mexican rain forest, where you can see a spider monkey, parrot, termite nest, anteater, and many other plants and animals. ''',
+    ),
+
   ];
 
   @override
