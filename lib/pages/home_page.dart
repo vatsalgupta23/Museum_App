@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:nfc_manager/nfc_manager.dart';
 
 class TagInputPage extends StatefulWidget {
   const TagInputPage({super.key});
@@ -9,26 +10,138 @@ class TagInputPage extends StatefulWidget {
 
 class _TagInputPageState extends State<TagInputPage> {
   final _controller = TextEditingController();
+  bool _isNfcAvailable = false;
+  bool _isScanning = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkNfcAvailability();
+  }
+
+  Future<void> _checkNfcAvailability() async {
+    final isAvailable = await NfcManager.instance.isAvailable();
+    if (mounted) {
+      setState(() {
+        _isNfcAvailable = isAvailable;
+      });
+    }
+  }
 
   void _handleSubmit() {
-    final text = _controller.text.trim();
+    final text = _controller.text.trim().toUpperCase();
 
-    // must be exactly 4 digits
-    final isValid = RegExp(r'^\d{4}$').hasMatch(text);
+    // must be exactly 4 alphanumeric characters (letters and/or numbers)
+    final isValid = RegExp(r'^[A-Z0-9]{4}$').hasMatch(text);
 
     if (!isValid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a 4-digit numeric tag')),
+        const SnackBar(content: Text('Please enter a 4-character alphanumeric tag')),
       );
       return;
     }
 
-    // Navigate to home page with the 4-digit tag
+    // Navigate to home page with the 4-character tag
     Navigator.pushNamed(
       context,
       '/homefeedpage',
-      arguments: text, // 👈 pass "1055" as a String
+      arguments: text, // pass tag as uppercase String
     );
+  }
+
+  Future<void> _scanNfcTag() async {
+    if (!_isNfcAvailable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NFC is not available on this device')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isScanning = true;
+    });
+
+    try {
+      NfcManager.instance.startSession(
+        onDiscovered: (NfcTag tag) async {
+          // Try to read NDEF records
+          final ndef = Ndef.from(tag);
+          if (ndef != null && ndef.cachedMessage != null) {
+            final records = ndef.cachedMessage!.records;
+            for (var record in records) {
+              // Check if it's a text record
+              if (record.typeNameFormat == NdefTypeNameFormat.nfcWellknown) {
+                try {
+                  final payload = record.payload;
+                  // Skip the first byte (language code length) and language code
+                  final languageCodeLength = payload[0];
+                  final textBytes = payload.sublist(1 + languageCodeLength);
+                  final text = String.fromCharCodes(textBytes).trim().toUpperCase();
+                  
+                  // Validate the text (4 alphanumeric characters)
+                  if (RegExp(r'^[A-Z0-9]{4}$').hasMatch(text)) {
+                    await NfcManager.instance.stopSession();
+                    if (mounted) {
+                      _controller.text = text;
+                      setState(() {
+                        _isScanning = false;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Tag read successfully: $text')),
+                      );
+                      // Auto-submit after successful read
+                      _handleSubmit();
+                    }
+                    return;
+                  }
+                } catch (e) {
+                  debugPrint('Error parsing NFC record: $e');
+                }
+              }
+            }
+          }
+          
+          // If we get here, no valid tag was found
+          await NfcManager.instance.stopSession(errorMessage: 'Invalid tag format');
+          if (mounted) {
+            setState(() {
+              _isScanning = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No valid 4-character tag found on NFC')),
+            );
+          }
+        },
+        onError: (error) async {
+          debugPrint('NFC error: $error');
+          if (mounted) {
+            setState(() {
+              _isScanning = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('NFC Error: ${error.message}')),
+            );
+          }
+        },
+      );
+    } catch (e) {
+      debugPrint('Error starting NFC session: $e');
+      if (mounted) {
+        setState(() {
+          _isScanning = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
+  }
+
+  void _cancelNfcScan() {
+    NfcManager.instance.stopSession();
+    setState(() {
+      _isScanning = false;
+    });
   }
 
   @override
@@ -42,16 +155,17 @@ class _TagInputPageState extends State<TagInputPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  'Type your 4-digit tag here',
+                  'Enter your 4-character tag',
                   style: TextStyle(fontSize: 16),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _controller,
-                  keyboardType: TextInputType.number,
+                  keyboardType: TextInputType.text,
                   maxLength: 4,
+                  textCapitalization: TextCapitalization.characters,
                   decoration: const InputDecoration(
-                    hintText: '1234',
+                    hintText: 'A1B2',
                     border: OutlineInputBorder(),
                     counterText: '',
                   ),
@@ -62,12 +176,60 @@ class _TagInputPageState extends State<TagInputPage> {
                   onPressed: _handleSubmit,
                   child: const Text('Continue'),
                 ),
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 24),
+                const Text(
+                  'Or scan an NFC tag',
+                  style: TextStyle(fontSize: 16, color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                if (_isNfcAvailable)
+                  _isScanning
+                      ? Column(
+                          children: [
+                            const CircularProgressIndicator(),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Hold your phone near the NFC tag...',
+                              style: TextStyle(fontSize: 14),
+                            ),
+                            const SizedBox(height: 12),
+                            OutlinedButton(
+                              onPressed: _cancelNfcScan,
+                              child: const Text('Cancel'),
+                            ),
+                          ],
+                        )
+                      : ElevatedButton.icon(
+                          onPressed: _scanNfcTag,
+                          icon: const Icon(Icons.nfc),
+                          label: const Text('Scan NFC Tag'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                          ),
+                        )
+                else
+                  const Text(
+                    'NFC not available on this device',
+                    style: TextStyle(fontSize: 12, color: Colors.red),
+                  ),
               ],
             ),
           ),
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    if (_isScanning) {
+      NfcManager.instance.stopSession();
+    }
+    super.dispose();
   }
 }
 
