@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 
 import 'package:just_audio/just_audio.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
@@ -143,9 +144,79 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
   void initState() {
     super.initState();
     _validateAudioMapping();
+    _initializeAudioSession();
     _initializeAudioPlayer();
     _preloadAudioFiles();
     _connectWebSocket();
+  }
+
+  // Initialize audio session for screen reader compatibility
+  Future<void> _initializeAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      
+      // Configure audio session to allow ducking of other audio (like screen readers)
+      // instead of interrupting them completely
+      await session.configure(
+        AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playback,
+          avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+          androidAudioAttributes: const AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.speech,
+            usage: AndroidAudioUsage.assistanceSonification,
+            flags: AndroidAudioFlags.audibilityEnforced,
+          ),
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
+          androidWillPauseWhenDucked: false,
+        ),
+      );
+      
+      // Handle interruptions (like phone calls)
+      session.interruptionEventStream.listen((event) {
+        debugPrint('🔊 Audio interruption: ${event.type}');
+        if (event.begin) {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              // Another app needs audio focus, lower our volume
+              _player.setVolume(0.3);
+              break;
+            case AudioInterruptionType.pause:
+            case AudioInterruptionType.unknown:
+              // Pause our audio
+              _player.pause();
+              if (mounted) {
+                setState(() => _isPlaying = false);
+              }
+              break;
+          }
+        } else {
+          // Interruption ended, restore
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              _player.setVolume(1.0);
+              break;
+            case AudioInterruptionType.pause:
+              // Don't auto-resume, let user control
+              break;
+            case AudioInterruptionType.unknown:
+              break;
+          }
+        }
+      });
+      
+      // Handle becoming noisy (headphones unplugged)
+      session.becomingNoisyEventStream.listen((_) {
+        debugPrint('🎧 Audio becoming noisy - pausing');
+        _player.pause();
+        if (mounted) {
+          setState(() => _isPlaying = false);
+        }
+      });
+      
+      debugPrint('✅ Audio session configured for screen reader compatibility');
+    } catch (e) {
+      debugPrint('❌ Error configuring audio session: $e');
+    }
   }
 
   // Validate audio configuration
@@ -272,6 +343,17 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
                 debugPrint('🔄 State updated: _nowPlayingTitle="$_nowPlayingTitle"');
               }
               
+              // Activate audio session for proper focus management
+              try {
+                final session = await AudioSession.instance;
+                if (!session.isActive) {
+                  await session.setActive(true);
+                  debugPrint('🔊 Audio session activated');
+                }
+              } catch (e) {
+                debugPrint('⚠️ Could not activate audio session: $e');
+              }
+              
               // Set and play audio
               await _player.setAudioSource(audioSource, preload: true);
               await _player.play();
@@ -330,6 +412,8 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
     _heroController.dispose();
     _ws?.sink.close(ws_status.goingAway);
     _player.dispose();
+    // Deactivate audio session
+    AudioSession.instance.then((session) => session.setActive(false));
     super.dispose();
   }
 

@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   web_socket_channel: ^2.4.0
   just_audio: ^0.9.39
+  audio_session: ^0.1.21
   nfc_manager: ^3.5.0
 
 dev_dependencies:
