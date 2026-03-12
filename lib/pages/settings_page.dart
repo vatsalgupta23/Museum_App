@@ -17,14 +17,20 @@ class _HomeFeedPageState extends State<HomeFeedPage> {
 
   // --- WebSocket + audio ---
   WebSocketChannel? _ws;
-  final AudioPlayer _player = AudioPlayer();
+  late final AudioPlayer _player;
   String? _nowPlayingTitle;
   bool _wsConnected = false;
 
   String? _userShortId;
 
-  // NEW: track if audio is currently playing
+  // Track if audio is currently playing
   bool _isPlaying = false;
+
+  // Map to cache preloaded audio sources with actual loaded data
+  final Map<String, AudioSource> _preloadedAudio = {};
+  
+  // Track which audio files have been fully loaded
+  final Set<String> _fullyLoadedTitles = {};
 
   // Map exhibit title -> audio asset (change filenames to yours)
   final Map<String, String> _audioForTitle = const {
@@ -136,7 +142,88 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
   @override
   void initState() {
     super.initState();
+    _validateAudioMapping();
+    _initializeAudioPlayer();
+    _preloadAudioFiles();
     _connectWebSocket();
+  }
+
+  // Validate audio configuration
+  void _validateAudioMapping() {
+    debugPrint('🔍 Audio configuration:');
+    debugPrint('📋 Available audio titles (${_audioForTitle.length}):');
+    for (final title in _audioForTitle.keys) {
+      debugPrint('   • "$title"');
+    }
+    
+    // Optional: check if card titles match audio titles
+    final cardTitles = cardItems.map((e) => e.title).toSet();
+    final audioTitles = _audioForTitle.keys.toSet();
+    
+    final cardsWithoutAudio = cardTitles.difference(audioTitles);
+    if (cardsWithoutAudio.isNotEmpty) {
+      debugPrint('⚠️ Cards without audio: $cardsWithoutAudio');
+    }
+    
+    debugPrint('✅ Server should send these exact titles in WebSocket messages');
+  }
+
+  // Initialize audio player with low latency settings
+  void _initializeAudioPlayer() {
+    _player = AudioPlayer(
+      // Configure for low latency playback
+      audioPipeline: AudioPipeline(
+        androidAudioEffects: [],
+      ),
+    );
+    
+    // Set volume to ready state for faster response
+    _player.setVolume(1.0);
+  }
+
+  // Preload all audio files with actual data loading for instant playback
+  Future<void> _preloadAudioFiles() async {
+    debugPrint('Starting audio preload...');
+    final loadTasks = <Future>[];
+    
+    for (final entry in _audioForTitle.entries) {
+      final title = entry.key;
+      final path = entry.value;
+      
+      // Create audio source and store it
+      final source = AudioSource.asset(path);
+      _preloadedAudio[title] = source;
+      
+      // Load audio data in background
+      final loadTask = _loadAudioData(title, source);
+      loadTasks.add(loadTask);
+    }
+    
+    // Wait for all audio files to load
+    await Future.wait(loadTasks);
+    debugPrint('✓ Preloaded ${_fullyLoadedTitles.length}/${_audioForTitle.length} audio files');
+  }
+  
+  // Load actual audio data into memory for a specific source
+  Future<void> _loadAudioData(String title, AudioSource source) async {
+    try {
+      // Create a temporary player to preload the audio data
+      final tempPlayer = AudioPlayer();
+      await tempPlayer.setAudioSource(source, preload: true);
+      
+      // Seek to ensure data is buffered
+      await tempPlayer.seek(Duration.zero);
+      
+      // Mark as fully loaded
+      _fullyLoadedTitles.add(title);
+      
+      // Dispose the temporary player
+      await tempPlayer.dispose();
+      
+      debugPrint('  ✓ Loaded: $title');
+    } catch (e) {
+      debugPrint('  ✗ Failed to load $title: $e');
+    }
   }
 
   void _connectWebSocket() {
@@ -151,8 +238,11 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
           final title = (msg['title'] ?? '').toString();
           final shortId = (msg['shortId'] ?? '').toString();
 
+          debugPrint('📡 WebSocket received: type="$type", title="$title", shortId="$shortId"');
+          debugPrint('   Current state: _nowPlayingTitle="$_nowPlayingTitle", _isPlaying=$_isPlaying');
+
           if (_userShortId != null && shortId.isNotEmpty && shortId != _userShortId) {
-            // Not for this user
+            debugPrint('   ⏭️ Skipped (not for this user: $_userShortId)');
             return;
           }
 
@@ -162,21 +252,59 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
           }
 
           if (type == 'PLAY_EXHIBIT' && title.isNotEmpty) {
-            final assetPath = _audioForTitle[title];
-            if (assetPath != null) {
-              await _player.setAsset(assetPath);
-              await _player.play();
+            debugPrint('📻 Received play command for: "$title"');
+            
+            // Use preloaded audio source for near-instant playback
+            final audioSource = _preloadedAudio[title];
+            if (audioSource != null) {
+              // Stop current playback first if something is playing
+              final wasPlaying = _isPlaying;
+              if (wasPlaying) {
+                await _player.stop();
+              }
+              
+              // UPDATE STATE (before playing so UI updates immediately)
               if (mounted) {
                 setState(() {
                   _nowPlayingTitle = title;
                   _isPlaying = true;
                 });
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text('Playing: $title')));
+                debugPrint('🔄 State updated: _nowPlayingTitle="$_nowPlayingTitle"');
+              }
+              
+              // Set and play audio
+              await _player.setAudioSource(audioSource, preload: true);
+              await _player.play();
+              
+              final loadStatus = _fullyLoadedTitles.contains(title) ? '⚡' : '⏳';
+              debugPrint('✅ Audio playing. Player status: playing=$_isPlaying, title in state: "$_nowPlayingTitle"');
+              
+              // Show notification AFTER state is updated
+              if (mounted) {
+                // Capture the current state value to ensure we show what's actually in state
+                final displayTitle = _nowPlayingTitle ?? title;
+                debugPrint('📢 Showing notification for: "$displayTitle"');
+                
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('$loadStatus Playing: $displayTitle'),
+                    duration: const Duration(seconds: 1),
+                  ),
+                );
               }
             } else {
-              debugPrint('No audio mapped for "$title"');
+              debugPrint('❌ ERROR: No audio found for "$title"');
+              debugPrint('   Available titles: ${_audioForTitle.keys.toList()}');
+              
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('⚠️ Audio not found: $title'),
+                    backgroundColor: Colors.orange,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
             }
           } else if (type == 'STOP_EXHIBIT' && title.isNotEmpty) {
             await _player.stop();
@@ -215,74 +343,109 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (_) {
         return DraggableScrollableSheet(
           expand: false,
-          initialChildSize: 0.55,
-          minChildSize: 0.4,
+          initialChildSize: 0.65,
+          minChildSize: 0.5,
           maxChildSize: 0.9,
           builder: (context, scrollController) {
-            return SingleChildScrollView(
-              controller: scrollController,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 36,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.black12,
-                          borderRadius: BorderRadius.circular(2),
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: SingleChildScrollView(
+                controller: scrollController,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade300,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: AspectRatio(
-                        aspectRatio: 16 / 9,
-                        child: Image.asset(imageUrl, fit: BoxFit.cover),
+                      const SizedBox(height: 20),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: AspectRatio(
+                          aspectRatio: 16 / 9,
+                          child: Image.asset(imageUrl, fit: BoxFit.cover),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (tag != null) ...[
+                      const SizedBox(height: 20),
+                      if (tag != null) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8F5E9),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            tag,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF2E7D32),
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       Text(
-                        tag,
+                        title,
                         style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black54,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1B5E20),
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 16),
+                      Text(
+                        description,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.6,
+                          color: Color(0xFF424242),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2E7D32),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: const Text(
+                            'Close',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      description,
-                      style: const TextStyle(fontSize: 15, height: 1.4),
-                    ),
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Close'),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             );
@@ -292,74 +455,111 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
     );
   }
 
-  // NEW: simple audio player UI shown below the card slider
+  // Audio player UI shown below the card slider
   Widget _buildAudioPlayer() {
-    //if (_nowPlayingTitle == null) return const SizedBox.shrink();
-
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(20),
       margin: const EdgeInsets.only(top: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF2E7D32),
+            const Color(0xFF43A047),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 6,
-            offset: const Offset(0, 3),
+            color: const Color(0xFF2E7D32).withOpacity(0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         children: [
-          const Icon(Icons.volume_up),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _nowPlayingTitle ?? '',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 2),
-                const Text(
-                  'Audio description',
-                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                child: const Icon(
+                  Icons.audiotrack,
+                  color: Colors.white,
+                  size: 24,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Now Playing',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _nowPlayingTitle ?? '',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          IconButton(
-            icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-            onPressed: () async {
-              if (_nowPlayingTitle == null) return;
-              final assetPath = _audioForTitle[_nowPlayingTitle!];
-              if (assetPath == null) return;
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                color: Colors.white,
+                iconSize: 48,
+                onPressed: () async {
+                  if (_nowPlayingTitle == null) return;
+                  final audioSource = _preloadedAudio[_nowPlayingTitle!];
+                  if (audioSource == null) return;
 
-              if (_isPlaying) {
-                await _player.pause();
-                setState(() => _isPlaying = false);
-              } else {
-                // ensure the correct asset is loaded before play
-                await _player.setAsset(assetPath);
-                await _player.play();
-                setState(() => _isPlaying = true);
-              }
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.stop),
-            onPressed: () async {
-              await _player.stop();
-              setState(() {
-                _nowPlayingTitle = null;
-                _isPlaying = false;
-              });
-            },
+                  if (_isPlaying) {
+                    await _player.pause();
+                    setState(() => _isPlaying = false);
+                  } else {
+                    // If not already loaded, set the source first
+                    if (_player.audioSource != audioSource) {
+                      await _player.setAudioSource(audioSource, preload: true);
+                    }
+                    await _player.play();
+                    setState(() => _isPlaying = true);
+                  }
+                },
+              ),
+              const SizedBox(width: 16),
+              IconButton(
+                icon: const Icon(Icons.stop_circle),
+                color: Colors.white,
+                iconSize: 36,
+                onPressed: () async {
+                  await _player.stop();
+                  setState(() {
+                    _nowPlayingTitle = null;
+                    _isPlaying = false;
+                  });
+                },
+              ),
+            ],
           ),
         ],
       ),
@@ -369,54 +569,128 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 238, 255, 239),
+      backgroundColor: const Color(0xFFF8FBF8),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'MSU Museum',
+          style: TextStyle(
+            color: Color(0xFF1B5E20),
+            fontWeight: FontWeight.bold,
+            fontSize: 20,
+          ),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(
+            height: 1,
+            color: const Color(0xFFE8F5E9),
+          ),
+        ),
+      ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           children: [
             // Search bar
             TextField(
               decoration: InputDecoration(
-                hintText: 'Search',
-                prefixIcon: const Icon(Icons.search),
+                hintText: 'Search exhibits...',
+                hintStyle: TextStyle(color: Colors.grey.shade400),
+                prefixIcon: Icon(
+                  Icons.search,
+                  color: const Color(0xFF2E7D32),
+                ),
                 filled: true,
-                fillColor: Colors.grey.shade100,
+                fillColor: Colors.white,
                 contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 14,
+                  horizontal: 16,
+                  vertical: 16,
                 ),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(16),
                   borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: const Color(0xFFE8F5E9),
+                    width: 1,
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: const Color(0xFF2E7D32),
+                    width: 2,
+                  ),
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
 
             // WS status
-            Row(
-              children: [
-                Icon(
-                  _wsConnected ? Icons.cloud_done : Icons.cloud_off,
-                  size: 18,
-                  color: _wsConnected ? Colors.green : Colors.red,
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: _wsConnected
+                    ? const Color(0xFFE8F5E9)
+                    : Colors.red.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _wsConnected
+                      ? const Color(0xFF2E7D32)
+                      : Colors.red.shade200,
+                  width: 1,
                 ),
-                const SizedBox(width: 6),
-                Text(_wsConnected ? 'Connected to server' : 'Disconnected'),
-              ],
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _wsConnected ? Icons.check_circle : Icons.error_outline,
+                    size: 20,
+                    color: _wsConnected
+                        ? const Color(0xFF2E7D32)
+                        : Colors.red.shade700,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    _wsConnected ? 'Connected to server' : 'Disconnected',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: _wsConnected
+                          ? const Color(0xFF1B5E20)
+                          : Colors.red.shade700,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 24),
+
+            // Featured Section Header
+            const Text(
+              'Featured',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1B5E20),
+              ),
+            ),
+            const SizedBox(height: 16),
 
             // Slider #1
             SizedBox(
-              height: 180,
+              height: 200,
               child: PageView.builder(
                 controller: _heroController,
                 itemCount: heroItems.length,
                 itemBuilder: (context, index) {
                   final item = heroItems[index];
                   return Padding(
-                    padding: const EdgeInsets.only(right: 12),
+                    padding: const EdgeInsets.only(right: 16),
                     child: GestureDetector(
                       onTap:
                           () => _showItemSheet(
@@ -431,27 +705,35 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
                 },
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 32),
 
             Row(
               children: const [
                 Text(
-                  'Title',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  'Museum Exhibits',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1B5E20),
+                  ),
                 ),
-                SizedBox(width: 6),
-                Icon(Icons.chevron_right),
+                Spacer(),
+                Icon(
+                  Icons.arrow_forward_ios,
+                  size: 16,
+                  color: Color(0xFF2E7D32),
+                ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
 
             // Slider #2
             SizedBox(
-              height: 220,
+              height: 240,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: cardItems.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                separatorBuilder: (_, __) => const SizedBox(width: 16),
                 itemBuilder: (context, index) {
                   final item = cardItems[index];
                   final isActive = item.title == _nowPlayingTitle;
@@ -466,7 +748,7 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
                         ),
                     child: _SmallItemCard(
                       item: item,
-                      isActive: isActive, // NEW: highlight when playing
+                      isActive: isActive,
                     ),
                   );
                 },
@@ -553,33 +835,85 @@ class _HeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.asset(item.imageUrl, fit: BoxFit.cover),
-          Container(color: Colors.black.withOpacity(0.15)),
-          Positioned(
-            left: 12,
-            top: 12,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.asset(item.imageUrl, fit: BoxFit.cover),
+            Container(
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.35),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                item.title,
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.1),
+                    Colors.black.withOpacity(0.4),
+                  ],
                 ),
               ),
             ),
-          ),
-        ],
+            Positioned(
+              left: 20,
+              bottom: 20,
+              right: 20,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2E7D32),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      item.title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'Tap to explore',
+                      style: TextStyle(
+                        color: Color(0xFF1B5E20),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -595,79 +929,118 @@ class _SmallItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+      duration: const Duration(milliseconds: 300),
       curve: Curves.easeOut,
-      width: 160,
-      padding: EdgeInsets.all(isActive ? 6 : 0),
+      width: 180,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border:
-            isActive
-                ? Border.all(color: Colors.amber.shade600, width: 3)
-                : null,
-        boxShadow:
-            isActive
-                ? [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.25),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-                : [],
-        color: isActive ? Colors.white : Colors.transparent,
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isActive ? const Color(0xFF2E7D32) : const Color(0xFFE8F5E9),
+          width: isActive ? 3 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isActive
+                ? const Color(0xFF2E7D32).withOpacity(0.2)
+                : Colors.black.withOpacity(0.06),
+            blurRadius: isActive ? 12 : 8,
+            offset: Offset(0, isActive ? 6 : 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Image
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: AspectRatio(
-              aspectRatio: 4 / 3,
-              child: Image.asset(item.imageUrl, fit: BoxFit.cover),
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // Tag + Now playing pill (if active)
-          Row(
+          Stack(
             children: [
-              Text(
-                item.tag,
-                style: const TextStyle(fontSize: 12, color: Colors.black54),
+              ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                ),
+                child: AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Image.asset(item.imageUrl, fit: BoxFit.cover),
+                ),
               ),
-              if (isActive) ...[
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
+              if (isActive)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2E7D32),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(
+                          Icons.volume_up,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Playing',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade600,
-                    borderRadius: BorderRadius.circular(8),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Content
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.tag,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF2E7D32),
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
                   ),
-                  child: const Text(
-                    'Now playing',
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  item.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: isActive ? const Color(0xFF1B5E20) : Colors.black87,
+                    height: 1.2,
                   ),
                 ),
               ],
-            ],
-          ),
-
-          // Title
-          Text(
-            item.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: isActive ? Colors.black : Colors.black87,
             ),
           ),
+          const SizedBox(height: 12),
         ],
       ),
     );
