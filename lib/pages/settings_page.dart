@@ -346,10 +346,8 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
               // Activate audio session for proper focus management
               try {
                 final session = await AudioSession.instance;
-                if (!session.isActive) {
-                  await session.setActive(true);
-                  debugPrint('🔊 Audio session activated');
-                }
+                await session.setActive(true);
+                debugPrint('🔊 Audio session activated');
               } catch (e) {
                 debugPrint('⚠️ Could not activate audio session: $e');
               }
