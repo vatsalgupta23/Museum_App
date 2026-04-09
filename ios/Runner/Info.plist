@@ -47,6 +47,8 @@
 	<true/>
 	<key>NFCReaderUsageDescription</key>
 	<string>This app needs NFC access to read exhibit tags</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app requires microphone access for audio features</string>
 	<key>com.apple.developer.nfc.readersession.formats</key>
 	<array>
 		<string>NDEF</string>
