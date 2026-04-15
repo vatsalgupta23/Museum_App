@@ -36,7 +36,7 @@ class _HomeFeedPageState extends State<HomeFeedPage> {
   // Map exhibit title -> audio asset (change filenames to yours)
   final Map<String, String> _audioForTitle = const {
     'Skeletons': 'assets/audio/Skeletons2.mp3',
-    'Skulls': 'assets/audio/Skulls2.mp3',
+    'Dinosaur Skulls': 'assets/audio/Skulls2.mp3',
     'Tundra': 'assets/audio/Tundra.mp3',
     'Boreal forest': 'assets/audio/Boreal.mp3',
     'Alpine': 'assets/audio/Alpine.mp3',

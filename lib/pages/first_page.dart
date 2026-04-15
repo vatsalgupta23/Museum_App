@@ -97,17 +97,7 @@ class WelcomePage extends StatelessWidget {
                       // Logo with subtle shadow
                       Container(
                         padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
-                              blurRadius: 20,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
+                        decoration: const BoxDecoration(),
                         child: Image.asset('assets/logo.png', height: 80),
                       ),
                       const SizedBox(height: 32),
@@ -177,8 +167,8 @@ class WelcomePage extends StatelessWidget {
                 // Bottom section (stays near bottom)
                 Column(
                   children: [
-                    Image.asset('assets/imls_logo_2c.jpg', height: 50),
-                    const SizedBox(height: 12),
+                    Image.asset('assets/imls_logo.png', height: 70),
+                    const SizedBox(height: 35),
                     const Text(
                       'This project was made possible in part by the Institute of Museum and Library Services (grant# ME-255578-OMS-24).',
                       textAlign: TextAlign.center,
