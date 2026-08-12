@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
+import 'package:path_provider/path_provider.dart';
 
 class HomeFeedPage extends StatefulWidget {
   const HomeFeedPage({super.key});
@@ -27,26 +30,39 @@ class _HomeFeedPageState extends State<HomeFeedPage> {
   // Track if audio is currently playing
   bool _isPlaying = false;
 
-  // Map to cache preloaded audio sources with actual loaded data
-  final Map<String, AudioSource> _preloadedAudio = {};
-  
-  // Track which audio files have been fully loaded
-  final Set<String> _fullyLoadedTitles = {};
+  // Selected audio language (set from route arguments)
+  String _selectedLanguage = 'en';
+  bool _audioInitialized = false;
 
-  // Map exhibit title -> audio asset (change filenames to yours)
-  final Map<String, String> _audioForTitle = const {
-    'Skeletons': 'assets/audio/Skeletons2.mp3',
-    'Dinosaur Skulls': 'assets/audio/Skulls2.mp3',
-    'Tundra': 'assets/audio/Tundra.mp3',
-    'Boreal forest': 'assets/audio/Boreal.mp3',
-    'Alpine': 'assets/audio/Alpine.mp3',
-    'Deciduous': 'assets/audio/Eastern.mp3',
-    'Grassland': 'assets/audio/Grassland.mp3',
-    'Desert': 'assets/audio/Desert.mp3',
-    'Rainforest': 'assets/audio/Rainforest.mp3',
-    'Habitat Hall': 'assets/audio/HabitatHall.mp3', // example; pick your file
-    'Casts': 'assets/audio/Casts.mp3',
+  // Map exhibit title -> base audio filename (language-independent)
+  static const Map<String, String> _audioFilenames = {
+    'Skeletons': 'Skeletons2',
+    'Dinosaur Skulls': 'Skulls2',
+    'Tundra': 'Tundra',
+    'Boreal forest': 'Boreal',
+    'Alpine': 'Alpine',
+    'Deciduous': 'Eastern',
+    'Grassland': 'Grassland',
+    'Desert': 'Desert',
+    'Rainforest': 'Rainforest',
+    'Habitat Hall': 'HabitatHall',
+    'Casts': 'Casts',
   };
+
+  // Dynamically compute audio paths based on selected language.
+  // English files live at assets/audio/{filename}.mp3 (existing flat structure).
+  // Other languages: assets/audio/{lang}/{filename}.mp3
+  Map<String, String> get _audioForTitle {
+    return {
+      for (final entry in _audioFilenames.entries)
+        entry.key: _selectedLanguage == 'en'
+            ? 'assets/audio/${entry.value}.mp3'
+            : 'assets/audio/$_selectedLanguage/${entry.value}.mp3',
+    };
+  }
+
+  // title -> asset path, populated once language is known
+  final Map<String, String> _audioPaths = {};
 
   // Fake data (add descriptions)
   final List<_HeroItem> heroItems = const [
@@ -143,10 +159,8 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
   @override
   void initState() {
     super.initState();
-    _validateAudioMapping();
     _initializeAudioSession();
     _initializeAudioPlayer();
-    _preloadAudioFiles();
     _connectWebSocket();
   }
 
@@ -252,49 +266,26 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
     _player.setVolume(1.0);
   }
 
-  // Preload all audio files with actual data loading for instant playback
-  Future<void> _preloadAudioFiles() async {
-    debugPrint('Starting audio preload...');
-    final loadTasks = <Future>[];
-    
-    for (final entry in _audioForTitle.entries) {
-      final title = entry.key;
-      final path = entry.value;
-      
-      // Create audio source and store it
-      final source = AudioSource.asset(path);
-      _preloadedAudio[title] = source;
-      
-      // Load audio data in background
-      final loadTask = _loadAudioData(title, source);
-      loadTasks.add(loadTask);
-    }
-    
-    // Wait for all audio files to load
-    await Future.wait(loadTasks);
-    debugPrint('✓ Preloaded ${_fullyLoadedTitles.length}/${_audioForTitle.length} audio files');
+  void _preloadAudioFiles() {
+    _audioPaths
+      ..clear()
+      ..addAll(_audioForTitle);
+    debugPrint('✓ Audio paths ready (${_audioPaths.length} exhibits, lang: $_selectedLanguage)');
   }
-  
-  // Load actual audio data into memory for a specific source
-  Future<void> _loadAudioData(String title, AudioSource source) async {
-    try {
-      // Create a temporary player to preload the audio data
-      final tempPlayer = AudioPlayer();
-      await tempPlayer.setAudioSource(source, preload: true);
-      
-      // Seek to ensure data is buffered
-      await tempPlayer.seek(Duration.zero);
-      
-      // Mark as fully loaded
-      _fullyLoadedTitles.add(title);
-      
-      // Dispose the temporary player
-      await tempPlayer.dispose();
-      
-      debugPrint('  ✓ Loaded: $title');
-    } catch (e) {
-      debugPrint('  ✗ Failed to load $title: $e');
+
+  // For non-English, bypass just_audio's cache (which may contain stale empty files)
+  // by loading bytes via rootBundle and writing to our own temp file.
+  Future<AudioSource> _buildAudioSource(String assetPath) async {
+    if (_selectedLanguage == 'en') {
+      return AudioSource.asset(assetPath);
     }
+    final bytes = (await rootBundle.load(assetPath)).buffer.asUint8List();
+    final tmpDir = await getTemporaryDirectory();
+    final safeFilename = assetPath.replaceAll('/', '_');
+    final file = File('${tmpDir.path}/museum_audio/$safeFilename');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes, flush: true);
+    return AudioSource.uri(Uri.file(file.path));
   }
 
   void _connectWebSocket() {
@@ -324,58 +315,56 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
 
           if (type == 'PLAY_EXHIBIT' && title.isNotEmpty) {
             debugPrint('📻 Received play command for: "$title"');
-            
-            // Use preloaded audio source for near-instant playback
-            final audioSource = _preloadedAudio[title];
-            if (audioSource != null) {
-              // Stop current playback first if something is playing
-              final wasPlaying = _isPlaying;
-              if (wasPlaying) {
-                await _player.stop();
-              }
-              
-              // UPDATE STATE (before playing so UI updates immediately)
+
+            final path = _audioPaths[title];
+            if (path != null) {
+              if (_isPlaying) await _player.stop();
+
               if (mounted) {
-                setState(() {
-                  _nowPlayingTitle = title;
-                  _isPlaying = true;
-                });
-                debugPrint('🔄 State updated: _nowPlayingTitle="$_nowPlayingTitle"');
+                setState(() { _nowPlayingTitle = title; _isPlaying = true; });
               }
-              
-              // Activate audio session for proper focus management
+
               try {
                 final session = await AudioSession.instance;
                 await session.setActive(true);
-                debugPrint('🔊 Audio session activated');
               } catch (e) {
                 debugPrint('⚠️ Could not activate audio session: $e');
               }
-              
-              // Set and play audio
-              await _player.setAudioSource(audioSource, preload: true);
-              await _player.play();
-              
-              final loadStatus = _fullyLoadedTitles.contains(title) ? '⚡' : '⏳';
-              debugPrint('✅ Audio playing. Player status: playing=$_isPlaying, title in state: "$_nowPlayingTitle"');
-              
-              // Show notification AFTER state is updated
-              if (mounted) {
-                // Capture the current state value to ensure we show what's actually in state
-                final displayTitle = _nowPlayingTitle ?? title;
-                debugPrint('📢 Showing notification for: "$displayTitle"');
-                
+
+              try {
+                // Fresh AudioSource each time avoids shared-state issues between players
+                final source = await _buildAudioSource(path);
+                await _player.setAudioSource(source);
+                await _player.play();
+                debugPrint('✅ Playing: "$title" ($path)');
+              } catch (e) {
+                debugPrint('❌ Failed to play $path: $e');
+                // Fall back to English if language-specific file fails
+                if (_selectedLanguage != 'en') {
+                  final fallbackPath = 'assets/audio/${_audioFilenames[title]}.mp3';
+                  debugPrint('↩️ Falling back to English: $fallbackPath');
+                  try {
+                    await _player.setAudioSource(AudioSource.asset(fallbackPath));
+                    await _player.play();
+                  } catch (e2) {
+                    debugPrint('❌ English fallback also failed: $e2');
+                    if (mounted) setState(() { _nowPlayingTitle = null; _isPlaying = false; });
+                  }
+                } else {
+                  if (mounted) setState(() { _nowPlayingTitle = null; _isPlaying = false; });
+                }
+              }
+
+              if (mounted && _isPlaying) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('$loadStatus Playing: $displayTitle'),
+                    content: Text('Playing: $title'),
                     duration: const Duration(seconds: 1),
                   ),
                 );
               }
             } else {
-              debugPrint('❌ ERROR: No audio found for "$title"');
-              debugPrint('   Available titles: ${_audioForTitle.keys.toList()}');
-              
+              debugPrint('❌ No path for "$title". Available: ${_audioPaths.keys.toList()}');
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -612,17 +601,10 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
                 iconSize: 48,
                 onPressed: () async {
                   if (_nowPlayingTitle == null) return;
-                  final audioSource = _preloadedAudio[_nowPlayingTitle!];
-                  if (audioSource == null) return;
-
                   if (_isPlaying) {
                     await _player.pause();
                     setState(() => _isPlaying = false);
                   } else {
-                    // If not already loaded, set the source first
-                    if (_player.audioSource != audioSource) {
-                      await _player.setAudioSource(audioSource, preload: true);
-                    }
                     await _player.play();
                     setState(() => _isPlaying = true);
                   }
@@ -663,6 +645,34 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
             fontSize: 20,
           ),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F5E9),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF2E7D32), width: 1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.language, size: 14, color: Color(0xFF2E7D32)),
+                  const SizedBox(width: 4),
+                  Text(
+                    _selectedLanguage.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2E7D32),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(
@@ -869,15 +879,24 @@ Tropical rain forests are home to the greatest diversity of animal life on earth
     if (_userShortId == null) {
       final args = ModalRoute.of(context)?.settings.arguments;
 
-      if (args is String) {
-        // should already be 4 digits
+      if (args is Map<String, dynamic>) {
+        _userShortId = args['tag'] as String?;
+        _selectedLanguage = (args['language'] as String?) ?? 'en';
+      } else if (args is String) {
+        // Legacy: plain string tag, default to English
         _userShortId = args;
       } else if (args is num) {
-        // if you ever pass a number, make it 4 digits
         _userShortId = args.toInt().toString().padLeft(4, '0');
       }
 
-      debugPrint('User shortId: $_userShortId');
+      debugPrint('User shortId: $_userShortId, language: $_selectedLanguage');
+
+      // Preload audio files for the selected language (only once)
+      if (!_audioInitialized) {
+        _audioInitialized = true;
+        _validateAudioMapping();
+        _preloadAudioFiles();
+      }
     }
   }
 

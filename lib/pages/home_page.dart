@@ -12,6 +12,18 @@ class _TagInputPageState extends State<TagInputPage> {
   final _controller = TextEditingController();
   bool _isNfcAvailable = false;
   bool _isScanning = false;
+  String _selectedLanguage = 'en';
+
+  static const Map<String, String> _languages = {
+    'en': 'English',
+    'ar': 'العربية',
+    'es': 'Español',
+    'fr': 'Français',
+    'zh': '中文',
+    'de': 'Deutsch',
+    'ko': '한국어',
+    'vi': 'Tiếng Việt',
+  };
 
   @override
   void initState() {
@@ -41,11 +53,11 @@ class _TagInputPageState extends State<TagInputPage> {
       return;
     }
 
-    // Navigate to home page with the 4-character tag
+    // Navigate to home page with the 4-character tag and selected language
     Navigator.pushNamed(
       context,
       '/homefeedpage',
-      arguments: text, // pass tag as uppercase String
+      arguments: {'tag': text, 'language': _selectedLanguage},
     );
   }
 
@@ -250,6 +262,60 @@ class _TagInputPageState extends State<TagInputPage> {
                         ),
                       ),
                       onSubmitted: (_) => _handleSubmit(),
+                    ),
+                    const SizedBox(height: 24),
+                    // Language selector
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Audio Language',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF2E7D32),
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _languages.entries.map((entry) {
+                        final isSelected = _selectedLanguage == entry.key;
+                        return GestureDetector(
+                          onTap: () => setState(() => _selectedLanguage = entry.key),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? const Color(0xFF2E7D32)
+                                  : const Color(0xFFF1F8F4),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: isSelected
+                                    ? const Color(0xFF2E7D32)
+                                    : const Color(0xFFBDBDBD),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Text(
+                              entry.value,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isSelected
+                                    ? Colors.white
+                                    : const Color(0xFF555555),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
                     ),
                     const SizedBox(height: 24),
                     SizedBox(
